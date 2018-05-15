@@ -36,6 +36,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const decorationType = vscode.window.createTextEditorDecorationType({
 		light: renderOptions,
 		dark: renderOptions,
+
+		textDecoration: 'none; display: none;',
 	});
 
 	let activeEditor = vscode.window.activeTextEditor;
@@ -70,7 +72,7 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		const regex = /:\S+:/g;
+		const regex = /:[^:]+:/g;
 		const text = activeEditor.document.getText();
 		const decorations: vscode.DecorationOptions[] = [];
 		let match;
