@@ -24,7 +24,7 @@
 	],
 	"main": "./out/extension",
 	"scripts": {
-		"vscode:prepublish": "npm run compile",
+		"vscode:prepublish": "tsc -p ./",
 		"compile": "tsc -p ./",
 		"watch": "tsc -watch -p ./",
 		"postinstall": "node ./node_modules/vscode/bin/install",
@@ -39,6 +39,7 @@
 		"vscode": "^1.1.6"
 	},
 	"dependencies": {
-		"emoji-datasource": "^4.0.4"
+		"emoji-datasource-emojione": "^4.0.4",
+		"emoji-regex": "^6.5.1"
 	}
 }

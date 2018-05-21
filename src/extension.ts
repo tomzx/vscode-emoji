@@ -1,114 +1,160 @@
-'use strict';
+import {window, workspace, ExtensionContext, Uri, Range, TextEditor, DecorationRangeBehavior, TextEditorDecorationType} from 'vscode';
+import * as emojione from 'emoji-datasource-emojione';
 
-import * as vscode from 'vscode';
-import * as data from 'emoji-datasource';
+type HashMap<T> = {[key: string] : T};
+const emojis = emojione as emojione.Emoji[];
 
-interface Emoji {
-	short_name: string;
-	sheet_x: number;
-	sheet_y: number;
-}
-
-export function activate(context: vscode.ExtensionContext) {
+export function activate(context: ExtensionContext) {
 	console.log('Congratulations, your extension "emoji" is now active!');
 
-	const emojiData: Emoji[] = <any>data;
-	console.log(emojiData);
-	const mappedEmoji: {[id: string]: Emoji} = {};
-	let size: [number, number] = [0, 0];
-	for (let emoji of emojiData) {
-		// Map emoji to their short name
-		mappedEmoji[emoji.short_name] = emoji;
-		// Compute the size of the image (in number of emojis horizontally and vertically)
-		size[0] = Math.max(size[0], emoji.sheet_x);
-		size[1] = Math.max(size[1], emoji.sheet_y);
+	const emojiUnicodeRegex = require('emoji-regex')();
+	const emojiShortCodeRegex = /:([^:\s]+):/g;
+
+	let mappedEmojiShortNameToUnicode: HashMap<string> = {};
+	let mappedEmojiUnicodeURL: HashMap<string> = {};
+	let knownEditors: [TextEditor, HashMap<Range[]>][] = [];
+	let decorators: HashMap<TextEditorDecorationType> = {};
+	let timeout: any;
+
+	for (let emoji of emojis) {
+		const path = context.asAbsolutePath('node_modules/emoji-datasource-emojione/img/emojione/64/' + emoji.image);
+		const url = Uri.file(path).toString();
+		const unicode = unifiedToUnicode(emoji.unified);
+		mappedEmojiShortNameToUnicode[emoji.short_name] = unicode;
+		mappedEmojiUnicodeURL[unicode] = url;
 	}
 
-	const url = context.asAbsolutePath('node_modules/emoji-datasource/img/emojione/sheets/32.png');
+	function getDecorator(unicode: string) {
+		if (!decorators[unicode]) {
+			decorators[unicode] = window.createTextEditorDecorationType({
+				textDecoration: 'none; background-image: url("'+ mappedEmojiUnicodeURL[unicode] + '"); '
+								+ 'background-repeat: no-repeat; background-position: center; '
+								+ 'background-size: 1em; width: 1em; display: inline-block; /*overflow: hidden;*/',
+				rangeBehavior: DecorationRangeBehavior.ClosedClosed,
+				letterSpacing: '-0.4em', // TODO(tom@tomrochette.com): We probably do not want this for unicode
+				color: 'transparent',
+			});
+		}
 
-	const renderOptions: vscode.ThemableDecorationInstanceRenderOptions = {
-		before: {
-			contentText: '',
-			textDecoration: 'none; display: inline-block; width: 1em; height: 1em; background-image: url("file:///'+ url.replace(/\\/g, '/') + '"); background-size: 5400%;',
-		},
-	};
-
-	const decorationType = vscode.window.createTextEditorDecorationType({
-		light: renderOptions,
-		dark: renderOptions,
-
-		textDecoration: 'none; display: none;',
-	});
-
-	let activeEditor = vscode.window.activeTextEditor;
-	if (activeEditor) {
-		triggerUpdateDecorations();
+		return decorators[unicode];
 	}
 
-	vscode.window.onDidChangeActiveTextEditor(editor => {
-		activeEditor = editor;
-		if (editor) {
-			triggerUpdateDecorations();
+	function getDecoratorByUnicode(unicode: string) {
+		if (!mappedEmojiUnicodeURL[unicode]) {
+			return null;
 		}
-	}, null, context.subscriptions);
 
-	vscode.workspace.onDidChangeTextDocument(event => {
-		if (activeEditor && event.document === activeEditor.document) {
-			triggerUpdateDecorations();
+		return getDecorator(unicode)
+	}
+
+	function unifiedToUnicode(value: string) {
+		let unicode = '';
+		let parts = value.split('-');
+		for (let part of parts) {
+			unicode += String.fromCodePoint(parseInt(part, 16));
 		}
-	}, null, context.subscriptions);
+		return unicode;
+	}
 
-	var timeout: any = null;
-	function triggerUpdateDecorations() {
+	function updateDecorations(textEditor: TextEditor|undefined, delay: number = 250) {
 		if (timeout) {
 			clearTimeout(timeout);
 		}
 
-		timeout = setTimeout(updateDecorations, 500);
-	}
-
-	function updateDecorations() {
-		if (!activeEditor) {
+		if (!textEditor) {
 			return;
 		}
 
-		const regex = /:[^:]+:/g;
-		const text = activeEditor.document.getText();
-		const decorations: vscode.DecorationOptions[] = [];
-		let match;
-		while (match = regex.exec(text)) {
-			const startPosition = activeEditor.document.positionAt(match.index);
-			const endPosition = activeEditor.document.positionAt(match.index + match[0].length);
+		timeout = setTimeout(() => {
+			let editor = knownEditors.find(v => v[0] == textEditor);
 
-			// Remove the beginning and ending colon
-			const emojiShortName = match[0].substr(1, match[0].length - 2);
-
-			if (!mappedEmoji[emojiShortName]) {
-				continue;
+			if (!editor) {
+				knownEditors.push([textEditor, {}]);
+				editor = knownEditors[knownEditors.length - 1];
 			}
 
-			const x = mappedEmoji[emojiShortName].sheet_x / (size[0]+1)*100;
-			const y = mappedEmoji[emojiShortName].sheet_y / (size[1])*100;
+			let [, ranges] = editor;
 
-			const override = {
-				before: {
-					fontStyle: 'none; background-position: ' + x + '% ' + y + '%;'
-				},
-			};
+			// TODO(tom@tomrochette.com): Do not reset everything, just those that were touched by the edit
+			for (let key in ranges) {
+				ranges[key] = [];
+			}
+			let text = textEditor.document.getText();
+			let match;
 
-			const decoration: vscode.DecorationOptions = {
-				range: new vscode.Range(startPosition, endPosition),
-				renderOptions: {
-					light: override,
-					dark: override,
+			emojiShortCodeRegex.lastIndex = 0;
+			while (match = emojiShortCodeRegex.exec(text)) {
+				let startPosition = textEditor.document.positionAt(match.index);
+				let endPosition = textEditor.document.positionAt(match.index + match[0].length);
+				let range = new Range(startPosition, endPosition);
+				let short_name = match[1];
+				let unicode = mappedEmojiShortNameToUnicode[short_name];
+
+				ranges[unicode] = ranges[unicode] || [];
+				ranges[unicode].push(range);
+			}
+
+			emojiUnicodeRegex.lastIndex = 0;
+			while (match = emojiUnicodeRegex.exec(text)) {
+				let startPosition = textEditor.document.positionAt(match.index);
+				let endPosition = textEditor.document.positionAt(match.index + match[0].length);
+				let range = new Range(startPosition, endPosition);
+				let unicode = match[0];
+
+				ranges[unicode] = ranges[unicode] || [];
+				ranges[unicode].push(range);
+			}
+
+			for (let key in ranges) {
+				let decorator = getDecoratorByUnicode(key);
+
+				if (decorator) {
+					textEditor.setDecorations(decorator, ranges[key]);
 				}
-			};
-
-			decorations.push(decoration);
-		}
-
-		activeEditor.setDecorations(decorationType, decorations);
+			}
+		}, delay);
 	}
+
+
+	context.subscriptions.push(
+		window.onDidChangeActiveTextEditor(editor => {
+			updateDecorations(editor, 0);
+		}),
+		workspace.onDidChangeTextDocument(event => {
+			let editor = knownEditors.find(v => v[0] == window.activeTextEditor);
+
+			if (editor) {
+				let activeDecorations = editor[1];
+
+				for (let change of event.contentChanges) {
+					let line = change.range.start.line;
+
+					// Has an emoji in it
+					if (emojiUnicodeRegex.exec(change.text)) {
+						updateDecorations(window.activeTextEditor, 0);
+						return;
+					}
+
+					// Updating what looks like a short name
+					if (change.text.indexOf(':') > -1 || (change.range.isSingleLine && event.document.lineAt(line).text.indexOf(':') > -1)) {
+						updateDecorations(window.activeTextEditor, 0);
+						return;
+					}
+				}
+
+				for (let key in activeDecorations) {
+					for (let knownRange of activeDecorations[key]) {
+						if (event.contentChanges.filter(range => range.range.intersection(knownRange)).length > 0) {
+							updateDecorations(window.activeTextEditor, 0);
+							return;
+						}
+					}
+				}
+			}
+		}),
+	);
+
+	updateDecorations(window.activeTextEditor);
 }
 
 export function deactivate() {
