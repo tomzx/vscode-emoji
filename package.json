@@ -2,7 +2,8 @@
 	"name": "emoji",
 	"displayName": "Emoji",
 	"description": "Emoji support for Windows 7.",
-	"version": "0.2.0",
+	"icon": "resources/logo/logo-128x128.png",
+	"version": "0.2.1",
 	"publisher": "tomzx",
 	"bugs": {
 		"url": "https://github.com/tomzx/vscode-emoji/issues"
